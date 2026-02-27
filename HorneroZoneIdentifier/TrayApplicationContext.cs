@@ -154,7 +154,9 @@ internal sealed class TrayApplicationContext : ApplicationContext
             if (enable)
             {
                 var exePath = Environment.ProcessPath ?? Application.ExecutablePath;
-                key.SetValue(AppName, $"\"{exePath}\"");
+                var appRefPath = Path.ChangeExtension(exePath, ".appref-ms");
+                var startValue = File.Exists(appRefPath) ? $"\"{appRefPath}\"" : $"\"{exePath}\"";
+                key.SetValue(AppName, startValue);
             }
             else
             {
