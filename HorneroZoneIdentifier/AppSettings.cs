@@ -9,6 +9,7 @@ internal sealed class AppSettings
     private static readonly string SettingsFile = Path.Combine(SettingsDir, "settings.json");
 
     public List<string> MonitoredFolders { get; set; } = [];
+    public List<string> AllowedExtensions { get; set; } = [];
     public bool StartWithWindows { get; set; } = false;
 
     public static AppSettings Load()
@@ -56,6 +57,13 @@ internal sealed class AppSettings
             if (Directory.Exists(folder))
                 settings.MonitoredFolders.Add(folder);
         }
+
+        settings.AllowedExtensions =
+        [
+            ".pdf", ".docx", ".doc", ".xlsx", ".xls",
+            ".pptx", ".ppt", ".zip", ".rar", ".7z",
+            ".msg", ".eml", ".txt", ".csv"
+        ];
 
         settings.Save();
         return settings;

@@ -56,6 +56,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _notifyIcon.DoubleClick += OnManageFolders;
 
         // Start monitoring
+        _cleaner.SetAllowedExtensions(_settings.AllowedExtensions);
         foreach (var folder in _settings.MonitoredFolders)
             _cleaner.AddPath(folder);
 
@@ -99,22 +100,26 @@ internal sealed class TrayApplicationContext : ApplicationContext
 
     private void OnManageFolders(object? sender, EventArgs e)
     {
-        using var form = new FolderManagerForm(_settings.MonitoredFolders);
+        using var form = new FolderManagerForm(_settings.MonitoredFolders, _settings.AllowedExtensions);
         if (form.ShowDialog() == DialogResult.OK)
         {
-            // Remove old watchers
             foreach (var folder in _settings.MonitoredFolders.ToList())
                 _cleaner.RemovePath(folder);
 
             _settings.MonitoredFolders = form.Folders;
+            _settings.AllowedExtensions = form.Extensions;
             _settings.Save();
 
-            // Add new watchers
             foreach (var folder in _settings.MonitoredFolders)
                 _cleaner.AddPath(folder);
 
-            ShowBalloon("Configuración actualizada",
-                $"Monitoreando {_settings.MonitoredFolders.Count} carpeta(s).");
+            _cleaner.SetAllowedExtensions(_settings.AllowedExtensions);
+
+            var extInfo = _settings.AllowedExtensions.Count > 0
+                ? $"{_settings.AllowedExtensions.Count} extension(es)"
+                : "todas las extensiones";
+            ShowBalloon("Configuracion actualizada",
+                $"Monitoreando {_settings.MonitoredFolders.Count} carpeta(s) - {extInfo}.");
         }
     }
 

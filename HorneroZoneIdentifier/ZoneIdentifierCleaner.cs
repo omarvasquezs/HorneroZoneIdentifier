@@ -9,6 +9,7 @@ internal sealed class ZoneIdentifierCleaner : IDisposable
     private readonly HashSet<string> _monitoredPaths = new(StringComparer.OrdinalIgnoreCase);
     private readonly object _lock = new();
     private bool _disposed;
+    private HashSet<string> _allowedExtensions = new(StringComparer.OrdinalIgnoreCase);
 
     public event Action<string>? FileProcessed;
     public event Action<string, Exception>? ErrorOccurred;
@@ -20,6 +21,23 @@ internal sealed class ZoneIdentifierCleaner : IDisposable
     public IReadOnlyCollection<string> MonitoredPaths
     {
         get { lock (_lock) return _monitoredPaths.ToList().AsReadOnly(); }
+    }
+
+    public void SetAllowedExtensions(IEnumerable<string> extensions)
+    {
+        lock (_lock)
+        {
+            _allowedExtensions = new HashSet<string>(extensions, StringComparer.OrdinalIgnoreCase);
+        }
+    }
+
+    private bool IsExtensionAllowed(string filePath)
+    {
+        lock (_lock)
+        {
+            if (_allowedExtensions.Count == 0) return true;
+            return _allowedExtensions.Contains(Path.GetExtension(filePath));
+        }
     }
 
     public void AddPath(string path)
@@ -74,10 +92,13 @@ internal sealed class ZoneIdentifierCleaner : IDisposable
         if (e.FullPath == null || Directory.Exists(e.FullPath))
             return;
 
+        if (!IsExtensionAllowed(e.FullPath))
+            return;
+
         Task.Run(async () =>
         {
-            // Small delay to let Outlook finish writing
-            await Task.Delay(500);
+            // 1000ms delay to let Outlook finish writing large attachments
+            await Task.Delay(1000);
             TryRemoveZoneIdentifier(e.FullPath);
         });
     }
@@ -120,12 +141,42 @@ internal sealed class ZoneIdentifierCleaner : IDisposable
             return 0;
 
         int count = 0;
-        foreach (var file in Directory.EnumerateFiles(folderPath, "*", SearchOption.AllDirectories))
+        foreach (var file in EnumerateFilesSafe(folderPath))
         {
+            if (!IsExtensionAllowed(file))
+                continue;
+
             if (TryRemoveZoneIdentifier(file))
                 count++;
         }
         return count;
+    }
+
+    private static IEnumerable<string> EnumerateFilesSafe(string rootPath)
+    {
+        var pending = new Stack<string>();
+        pending.Push(rootPath);
+
+        while (pending.Count > 0)
+        {
+            var dir = pending.Pop();
+
+            IEnumerable<string> files;
+            try { files = Directory.EnumerateFiles(dir); }
+            catch (UnauthorizedAccessException) { continue; }
+            catch (IOException) { continue; }
+
+            foreach (var file in files)
+                yield return file;
+
+            IEnumerable<string> subdirs;
+            try { subdirs = Directory.EnumerateDirectories(dir); }
+            catch (UnauthorizedAccessException) { continue; }
+            catch (IOException) { continue; }
+
+            foreach (var sub in subdirs)
+                pending.Push(sub);
+        }
     }
 
     public void Dispose()
