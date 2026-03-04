@@ -18,6 +18,13 @@ internal sealed class ZoneIdentifierCleaner : IDisposable
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool DeleteFile(string lpFileName);
 
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+    private static extern void SHChangeNotify(uint wEventId, uint uFlags, string dwItem1, IntPtr dwItem2);
+
+    private const uint SHCNE_ATTRIBUTES = 0x00000800;
+    private const uint SHCNF_PATHW = 0x0005;
+    private const uint SHCNF_FLUSH = 0x1000;
+
     public IReadOnlyCollection<string> MonitoredPaths
     {
         get { lock (_lock) return _monitoredPaths.ToList().AsReadOnly(); }
@@ -95,11 +102,22 @@ internal sealed class ZoneIdentifierCleaner : IDisposable
         if (!IsExtensionAllowed(e.FullPath))
             return;
 
+        var path = e.FullPath;
         Task.Run(async () =>
         {
-            // 1000ms delay to let Outlook finish writing large attachments
-            await Task.Delay(1000);
-            TryRemoveZoneIdentifier(e.FullPath);
+            // Attempt immediately — drag-and-drop files are already complete on drop,
+            // so removing before Explorer evaluates the preview avoids the blocked state
+            if (TryRemoveZoneIdentifier(path))
+                return;
+
+            // Retry with backoff for Save As with large attachments still being written
+            int[] retryDelays = [300, 700, 1000, 2000];
+            foreach (var delay in retryDelays)
+            {
+                if (!File.Exists(path)) return;
+                await Task.Delay(delay);
+                if (TryRemoveZoneIdentifier(path)) return;
+            }
         });
     }
 
@@ -115,6 +133,8 @@ internal sealed class ZoneIdentifierCleaner : IDisposable
             // DeleteFile on an ADS path removes only that stream
             if (DeleteFile(adsPath))
             {
+                // Notify Explorer to refresh its view so the preview pane updates immediately
+                SHChangeNotify(SHCNE_ATTRIBUTES, SHCNF_PATHW | SHCNF_FLUSH, filePath, IntPtr.Zero);
                 FileProcessed?.Invoke(filePath);
                 return true;
             }
