@@ -126,16 +126,27 @@ internal sealed class TrayApplicationContext : ApplicationContext
         }
     }
 
-    private void OnCleanNow(object? sender, EventArgs e)
+    private async void OnCleanNow(object? sender, EventArgs e)
     {
-        int total = 0;
-        foreach (var folder in _settings.MonitoredFolders)
-            total += _cleaner.CleanFolder(folder);
+        if (_settings.MonitoredFolders.Count == 0)
+        {
+            ShowBalloon("Limpiar carpetas", "No hay carpetas monitoreadas configuradas.");
+            return;
+        }
+
+        using var picker = new FolderPickerForm(_settings.MonitoredFolders);
+        if (picker.ShowDialog() != DialogResult.OK || picker.SelectedFolder is null)
+            return;
+
+        var folder = picker.SelectedFolder;
+        ShowBalloon("Limpiando...", $"Limpiando {Path.GetFileName(folder)}...");
+
+        int total = await Task.Run(() => _cleaner.CleanFolder(folder));
 
         ShowBalloon("Limpieza completa",
             total > 0
-                ? $"Se eliminaron {total} Zone Identifier(s)."
-                : "No se encontraron Zone Identifiers.");
+                ? $"Se eliminaron {total} Zone Identifier(s) en {Path.GetFileName(folder)}."
+                : $"No se encontraron Zone Identifiers en {Path.GetFileName(folder)}.");
     }
 
     private void OnStartupChanged(object? sender, EventArgs e)
