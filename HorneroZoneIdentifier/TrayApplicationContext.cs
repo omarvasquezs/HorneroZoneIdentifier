@@ -60,6 +60,9 @@ internal sealed class TrayApplicationContext : ApplicationContext
         foreach (var folder in _settings.MonitoredFolders)
             _cleaner.AddPath(folder);
 
+        // Re-apply startup setting on every launch to self-heal after reinstall/update
+        SetStartup(_settings.StartWithWindows);
+
         ShowBalloon("Agente iniciado",
             $"Monitoreando {_settings.MonitoredFolders.Count} carpeta(s) para eliminar Zone Identifiers.");
     }
@@ -141,32 +144,104 @@ internal sealed class TrayApplicationContext : ApplicationContext
 
         _settings.StartWithWindows = item.Checked;
         _settings.Save();
-        SetStartup(item.Checked);
+
+        bool ok = SetStartup(item.Checked);
+        if (item.Checked)
+        {
+            ShowBalloon("Inicio con Windows",
+                ok ? "Iniciara automaticamente con Windows."
+                   : "No se pudo registrar el inicio automatico.");
+        }
     }
 
-    private static void SetStartup(bool enable)
+    private static bool SetStartup(bool enable)
+    {
+        // Prefer Startup folder: not subject to Windows startup suppression,
+        // and .appref-ms reference always launches the latest ClickOnce version.
+        var startupFolder = Environment.GetFolderPath(Environment.SpecialFolder.Startup);
+        var startupLink = Path.Combine(startupFolder, AppName + ".appref-ms");
+
+        if (enable)
+        {
+            var appRef = FindAppRef();
+            if (appRef != null)
+            {
+                try
+                {
+                    File.Copy(appRef, startupLink, overwrite: true);
+                    TryRemoveRegistryStartup();
+                    return File.Exists(startupLink);
+                }
+                catch { }
+            }
+
+            // Fallback for non-ClickOnce (development / direct .exe run)
+            return TrySetRegistryStartup();
+        }
+        else
+        {
+            try { if (File.Exists(startupLink)) File.Delete(startupLink); }
+            catch { }
+            TryRemoveRegistryStartup();
+            return true;
+        }
+    }
+
+    private static string? FindAppRef()
+    {
+        var root = Environment.GetFolderPath(Environment.SpecialFolder.Programs);
+        if (!Directory.Exists(root)) return null;
+
+        // First attempt: fast path with AllDirectories
+        try
+        {
+            var found = Directory.EnumerateFiles(root, "*.appref-ms", SearchOption.AllDirectories)
+                .FirstOrDefault(f => f.IndexOf("Hornero", StringComparison.OrdinalIgnoreCase) >= 0);
+            if (found != null) return found;
+        }
+        catch { }
+
+        // Second attempt: enumerate subdirectories one level at a time to avoid
+        // UnauthorizedAccessException from AllDirectories stopping the search
+        try
+        {
+            foreach (var dir in Directory.EnumerateDirectories(root))
+            {
+                try
+                {
+                    var found = Directory.EnumerateFiles(dir, "*.appref-ms")
+                        .FirstOrDefault(f => f.IndexOf("Hornero", StringComparison.OrdinalIgnoreCase) >= 0);
+                    if (found != null) return found;
+                }
+                catch { }
+            }
+        }
+        catch { }
+
+        return null;
+    }
+
+    private static bool TrySetRegistryStartup()
     {
         try
         {
             using var key = Registry.CurrentUser.OpenSubKey(RegistryRunKey, true);
-            if (key == null) return;
+            if (key == null) return false;
+            var exePath = Environment.ProcessPath ?? Application.ExecutablePath;
+            key.SetValue(AppName, $"\"{exePath}\"");
+            return key.GetValue(AppName) != null;
+        }
+        catch { return false; }
+    }
 
-            if (enable)
-            {
-                var exePath = Environment.ProcessPath ?? Application.ExecutablePath;
-                var appRefPath = Path.ChangeExtension(exePath, ".appref-ms");
-                var startValue = File.Exists(appRefPath) ? $"\"{appRefPath}\"" : $"\"{exePath}\"";
-                key.SetValue(AppName, startValue);
-            }
-            else
-            {
-                key.DeleteValue(AppName, false);
-            }
-        }
-        catch
+    private static void TryRemoveRegistryStartup()
+    {
+        try
         {
-            // Registry access may fail in restricted environments
+            using var key = Registry.CurrentUser.OpenSubKey(RegistryRunKey, true);
+            key?.DeleteValue(AppName, false);
         }
+        catch { }
     }
 
     private void ShowBalloon(string title, string text)
