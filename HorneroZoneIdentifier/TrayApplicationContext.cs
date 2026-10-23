@@ -167,8 +167,11 @@ internal sealed class TrayApplicationContext : ApplicationContext
 
     private static bool SetStartup(bool enable)
     {
-        // Prefer Startup folder: not subject to Windows startup suppression,
-        // and .appref-ms reference always launches the latest ClickOnce version.
+        // Always remove any legacy Registry Run entry from older versions
+        TryRemoveRegistryStartup();
+
+        // Use Startup folder with .appref-ms reference so it always launches
+        // the latest ClickOnce version without writing to the Windows Registry.
         var startupFolder = Environment.GetFolderPath(Environment.SpecialFolder.Startup);
         var startupLink = Path.Combine(startupFolder, AppName + ".appref-ms");
 
@@ -180,20 +183,17 @@ internal sealed class TrayApplicationContext : ApplicationContext
                 try
                 {
                     File.Copy(appRef, startupLink, overwrite: true);
-                    TryRemoveRegistryStartup();
                     return File.Exists(startupLink);
                 }
                 catch { }
             }
 
-            // Fallback for non-ClickOnce (development / direct .exe run)
-            return TrySetRegistryStartup();
+            return false;
         }
         else
         {
             try { if (File.Exists(startupLink)) File.Delete(startupLink); }
             catch { }
-            TryRemoveRegistryStartup();
             return true;
         }
     }
@@ -230,19 +230,6 @@ internal sealed class TrayApplicationContext : ApplicationContext
         catch { }
 
         return null;
-    }
-
-    private static bool TrySetRegistryStartup()
-    {
-        try
-        {
-            using var key = Registry.CurrentUser.OpenSubKey(RegistryRunKey, true);
-            if (key == null) return false;
-            var exePath = Environment.ProcessPath ?? Application.ExecutablePath;
-            key.SetValue(AppName, $"\"{exePath}\"");
-            return key.GetValue(AppName) != null;
-        }
-        catch { return false; }
     }
 
     private static void TryRemoveRegistryStartup()
